@@ -140,7 +140,7 @@ def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=128):
     def input_fn():
         dataset = TFRecordDataset('data/{}.tfrecords'.format(dataset_name), compression_type='GZIP')
         dataset = dataset.batch(batch_size)
-        dataset = dataset.prefetch(10)
+        dataset = dataset.prefetch(100)
         dataset = dataset.repeat(num_epoch)
         dataset = dataset.map(_parse_function)
 
@@ -180,12 +180,6 @@ def main():
     config = config.replace(save_summary_steps=10000)
     config = config.replace(save_checkpoints_steps=10000)
     config = config.replace(keep_checkpoint_max=20)
-    estimator = tf.estimator.Estimator(model_fn=perso_mnist_net_model_fn,
-                                       model_dir='mnist_test',
-                                       params={'learning_rate': 0.01,
-                                               'dropout': 1.00},
-                                       config=config)
-
 
     if tf.app.flags.FLAGS.enable_tfrecords:
         input_train, input_train_init_hook = get_input_fn_dataset('train', 30)
@@ -195,7 +189,31 @@ def main():
         input_train, input_validation, input_test = get_inputs_fn_based_on_generator()
 
     print("Test")
-    estimator.train(input_fn=input_train, hooks=[input_train_init_hook])
+
+    params = {'learning_rate': 0.01, 'dropout': 1.00}
+
+    if tf.app.flags.FLAGS.enable_estimators:
+        estimator = tf.estimator.Estimator(model_fn=perso_mnist_net_model_fn,
+                                           model_dir='mnist_test',
+                                           params=params,
+                                           config=config)
+
+        estimator.train(input_fn=input_train, hooks=[input_train_init_hook])
+    else:
+        with tf.Session() as sess:
+            next_batch = input_train()
+            X = next_batch[0]
+            Y = next_batch[1]
+            estimator_spec = perso_mnist_net_model_fn(X, Y, params=params)
+
+            sess.run(input_train_init_hook.iterator_init_op)
+            sess.run(tf.global_variables_initializer())
+            while True:
+                start = time.time()
+                loss_val = sess.run(estimator_spec.train_op)
+                duration = time.time() - start
+                print("Nb/sec = {}".format(1.0/duration))
+
 
     #print("Bench iterator speed")
     #session = tf.Session()
@@ -211,4 +229,5 @@ def main():
 
 if __name__ == "__main__":
     tf.app.flags.DEFINE_boolean("enable_tfrecords", True, """True = use tfrecords, False = use python generator (slow)""")
+    tf.app.flags.DEFINE_boolean("enable_estimators", True, """True = use estimators""")
     main()

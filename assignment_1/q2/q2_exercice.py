@@ -14,7 +14,9 @@ from tensorflow.contrib.data import Dataset, TFRecordDataset
 from functools import partial
 import time
 
-tf.logging.set_verbosity(tf.logging.INFO)   # require to see the training hooks stuff
+#from high_performance import get_stage_op
+
+#tf.logging.set_verbosity(tf.logging.INFO)   # require to see the training hooks stuff
 
 def load_mnist(path='./data'):
     mnist = input_data.read_data_sets(path, one_hot=True)
@@ -35,7 +37,17 @@ def perso_mnist_net_model_fn(features, labels, mode=tf.estimator.ModeKeys.TRAIN,
     #X = features['feature']
     X = features
     labels = tf.reshape(labels, [-1, n_classes])  # ou tf.squeeze
-    Y = tf.cast(labels, tf.int32)
+    print(labels.shape)
+    print(labels.dtype)
+
+    # just for testing :
+
+    import numpy as np
+    X = tf.constant(np.zeros([128, 784]), dtype=tf.float32)
+    Y = tf.constant(np.zeros([128, 10], dtype=np.int32), dtype=tf.int32)
+
+
+    #Y = tf.cast(labels, tf.int32)
     flat_input = tf.keras.layers.Flatten()(X)
     fc1 = tf.keras.layers.Dense(100)(flat_input)
     fc2 = tf.keras.layers.Dense(100)(fc1)
@@ -139,10 +151,10 @@ def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=128):
 
     def input_fn():
         dataset = TFRecordDataset('data/{}.tfrecords'.format(dataset_name), compression_type='GZIP')
-        dataset = dataset.batch(batch_size)
-        dataset = dataset.prefetch(100)
         dataset = dataset.repeat(num_epoch)
+        dataset = dataset.batch(batch_size)
         dataset = dataset.map(_parse_function)
+        dataset = dataset.prefetch(10)
 
         iterator = dataset.make_initializable_iterator()
         init_hook.iterator_init_op = iterator.initializer
@@ -171,6 +183,7 @@ def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=128):
 class IteratorInitHook(tf.train.SessionRunHook):
 
     def after_create_session(self, session, coord):
+        print("Running init hook")
         session.run(self.iterator_init_op)
 
 
@@ -180,6 +193,7 @@ def main():
     config = config.replace(save_summary_steps=10000)
     config = config.replace(save_checkpoints_steps=10000)
     config = config.replace(keep_checkpoint_max=20)
+    config = config.replace(log_step_count_steps=2)
 
     if tf.app.flags.FLAGS.enable_tfrecords:
         input_train, input_train_init_hook = get_input_fn_dataset('train', 30)
@@ -198,7 +212,9 @@ def main():
                                            params=params,
                                            config=config)
 
+
         estimator.train(input_fn=input_train, hooks=[input_train_init_hook])
+        #estimator.train(input_fn=lambda : ([0]*128, [[0]*10]*128))
     else:
         with tf.Session() as sess:
             next_batch = input_train()

@@ -5,153 +5,96 @@ Task 1: Improving the accuracy of our logistic regression on MNIST (objective 97
 
 """
 
+import cv2
+import os
 import tensorflow as tf
 
 from tensorflow.examples.tutorials.mnist import input_data
-from tensorflow.python.training import training_util
-from tensorflow.contrib.data import Dataset, TFRecordDataset
+from tensorflow.contrib.data import TFRecordDataset
 
-from functools import partial
-import time
 
-#from high_performance import get_stage_op
-
-#tf.logging.set_verbosity(tf.logging.INFO)   # require to see the training hooks stuff
 
 def load_mnist(path='./data'):
     mnist = input_data.read_data_sets(path, one_hot=True)
     return mnist
+
+
+def simple_model(X, nb_class=10):
+    flat_input = tf.keras.layers.Flatten()(X)
+
+    fc1 = tf.keras.layers.Dense(100)(flat_input)
+    fc1 = tf.keras.layers.Activation('relu')(fc1)
+
+    fc2 = tf.keras.layers.Dense(200)(fc1)
+    fc2 = tf.keras.layers.Activation('relu')(fc2)
+
+    logits = tf.keras.layers.Dense(nb_class)(fc2)
+    return logits
+
 
 def perso_mnist_net_model_fn(features, labels, mode=tf.estimator.ModeKeys.TRAIN, params=None):
 
     """
     a model_fn for Estimator class
 
-    This function will be called to create a new graph each time an estimator method is called on an estimator using
-    this function.
+    This function will be called to create a new graph each time an estimator method is called
     """
     learning_rate = params['learning_rate']
+    nb_class = 10
+    tf.keras.backend.set_learning_phase(mode == tf.estimator.ModeKeys.TRAIN)
 
-    n_classes = 10
-
-    #X = features['feature']
     X = features
-    labels = tf.reshape(labels, [-1, n_classes])  # ou tf.squeeze
-    print(labels.shape)
-    print(labels.dtype)
+    logits = simple_model(X, nb_class=nb_class)
+    predictions = {'class': tf.argmax(logits, axis=1)}
 
-    # just for testing :
-
-    import numpy as np
-    X = tf.constant(np.zeros([128, 784]), dtype=tf.float32)
-    Y = tf.constant(np.zeros([128, 10], dtype=np.int32), dtype=tf.int32)
+    # Provide an estimator spec for `ModeKeys.PREDICT`.
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        predictions['image'] = X
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
 
-    #Y = tf.cast(labels, tf.int32)
-    flat_input = tf.keras.layers.Flatten()(X)
-    fc1 = tf.keras.layers.Dense(100)(flat_input)
-    fc2 = tf.keras.layers.Dense(100)(fc1)
-
-    logits = tf.keras.layers.Dense(n_classes)(fc2)
-
-
-    with tf.name_scope('predictions'):
-        predictions = tf.argmax(logits, axis=1)
-
+    labels = tf.reshape(labels, [-1, nb_class])  # o: tf.squeeze
+    Y = tf.cast(labels, tf.int32)
     with tf.name_scope('loss'):
         entropy = tf.nn.softmax_cross_entropy_with_logits(labels=tf.cast(labels, tf.float32), logits=logits)
         loss = tf.reduce_mean(entropy, name='loss') # computes the mean over all the examples in the batch
-        #loss = tf.reduce_mean(-tf.reduce_sum(tf.cast(labels, tf.float32)*tf.log(logits), reduction_indices=1))
 
 
     gt_label = tf.argmax(Y, axis=1)
-    accuracy = tf.contrib.metrics.accuracy(predictions, gt_label)
+    accuracy = tf.contrib.metrics.accuracy(predictions['class'], gt_label)
 
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=training_util.get_global_step())
-    #train_op = tf.train.RMSPropOptimizer(learning_rate).minimize(loss, global_step=training_util.get_global_step())
+    train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=tf.train.get_global_step())
 
-    #print("Declaring {}".format("_".join([mode, "loss"])))
-    tf.summary.scalar('loss', loss)
-    tf.summary.scalar('accuracy_' + mode, accuracy)
 
-    #images = tf.reshape(X, shape=[-1, 28, 28, 1])
-    #tf.summary.image('input', images, max_outputs=32)
-    #tf.summary.scalar("_".join([mode, "loss"]), accuracy)
-
-    #logging_hook = tf.train.LoggingTensorHook({"accuracy":accuracy, "loss": loss}, every_n_iter=1, formatter=lambda x: '--- > logging hook {}'.format(x))
-    logging_hook = tf.train.LoggingTensorHook({"loss":loss, "accuracy": accuracy}, every_n_iter=1, formatter=lambda x: '--- > logging hook {}'.format(x))
-    #validation_hook = tf.train.LoggingTensorHook({"gt":gt_label, 'prediction': predictions, 'accuracy': accuracy}, every_n_iter=1, formatter=lambda x: '--- > logging hook {}'.format(x))
-    validation_hook = tf.train.LoggingTensorHook({'accuracy': accuracy}, every_n_iter=1, formatter=lambda x: '--- > logging hook {}'.format(x))
-
-    accuracy_metric = tf.contrib.metrics.streaming_accuracy(predictions, gt_label)
+    accuracy_metric = tf.contrib.metrics.streaming_accuracy(predictions['class'], gt_label)
 
     log_hook = tf.train.LoggingTensorHook(
         {
             'loss': loss,
             'accuracy': accuracy,
-            'step': training_util.get_global_step()
-        },
-        every_n_iter=100)
+            'step': tf.train.get_global_step()
+        }, every_n_iter=100)
 
+
+    tf.summary.scalar('accuracy_' + mode, accuracy)
 
     return tf.estimator.EstimatorSpec(predictions=predictions, loss=loss, train_op=train_op, mode=mode,
                                       training_hooks=[log_hook], evaluation_hooks=[], eval_metric_ops={'acc_validation': accuracy_metric})
 
-class TimerHook(tf.train.SessionRunHook):
-    def before_run(self, run_context):
-        self.start_at = time.time()
 
-    def after_run(self, run_context, run_values):
-        duration = time.time() - self.start_at
-        #print("Duration of run was {}".format(duration))
-
-
-#class MyNStepHook(tf.train.SessionRunHook):
-#    def before_run(self, run_context):
-#        tf.train.SessionRunArgs({'global_step': global_step, 'train_accuracy': train_accuracy})
-#
-#
-#    def after_run(self, run_context, run_values):
-#        if run_context.get
-#        duration = time.time() - self.start_at
-#        print("Duration of run was {}".format(duration))
-
-def get_inputs_fn_based_on_generator():
-    mnist = load_mnist()
-    batch_size = 10
-    from tensorflow.contrib.learn.python.learn.learn_io import generator_input_fn
-
-
-    def input_fn(dataset, max_epoch=None):
-        init_epochs = dataset.epochs_completed
-        while True:
-            if max_epoch is not None and dataset.epochs_completed - init_epochs >= max_epoch:
-                raise StopIteration
-            else:
-                val = dataset.next_batch(1)
-                yield {'feature': val[0], 'label': val[1]}
-
-
-    my_input_fn_val = generator_input_fn(lambda: input_fn(mnist.validation, 1), target_key='label', batch_size=128)
-    my_input_fn_test = generator_input_fn(lambda: input_fn(mnist.test, 1), target_key='label', batch_size=128)
-    my_input_fn_train = generator_input_fn(lambda: input_fn(mnist.train, 30), target_key='label', batch_size=128)
-    return my_input_fn_train, my_input_fn_val, my_input_fn_test
-
-def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=128):
+def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=256):
     # idea taken from https://stackoverflow.com/questions/45620449/initialization-of-tf-contrib-data-iterator-with-tf-estimator
-    # pas de vrai amelioration en terme de speed.. TODO: tester sans iterateur tout dans le meme graph
-    # in order to have everythings in same graph
     init_hook = IteratorInitHook()
     def _parse_function(example_proto):
       features = {"image": tf.FixedLenFeature([784], tf.float32),
                   "label": tf.FixedLenFeature([10], tf.float32)}
-      #parsed_features = tf.parse_single_example(example_proto, features)
       parsed_features = tf.parse_example(example_proto, features)
       return parsed_features["image"], parsed_features["label"]
 
     def input_fn():
         dataset = TFRecordDataset('data/{}.tfrecords'.format(dataset_name), compression_type='GZIP')
         dataset = dataset.repeat(num_epoch)
+        dataset = dataset.shuffle(10*batch_size)
         dataset = dataset.batch(batch_size)
         dataset = dataset.map(_parse_function)
         dataset = dataset.prefetch(10)
@@ -160,90 +103,54 @@ def get_input_fn_dataset(dataset_name = 'train', num_epoch=30, batch_size=128):
         init_hook.iterator_init_op = iterator.initializer
         #iterator = dataset.make_one_shot_iterator()
         return iterator.get_next()
-        #image, label = iterator.get_next()
-        #return image, label
     return input_fn, init_hook
-    #return iterator.get_next()
-
-
-# attention using a lambda here.. you get something really slow..
-    #input_fn_train = lambda: input_fn('data/train.tfrecords', 30)
-    #input_fn_val = lambda: input_fn('data/validation.tfrecords', 1)
-    #input_fn_test = lambda: input_fn('data/validation.tfrecords', 1)
-
-    #input_fn_train = partial(input_fn, 'data/train.tfrecords', 30)
-    #input_fn_val = partial(input_fn, 'data/validation.tfrecords', 1)
-    #input_fn_test = partial(input_fn, 'data/validation.tfrecords', 1)
-
-
-
-
 
 
 class IteratorInitHook(tf.train.SessionRunHook):
 
     def after_create_session(self, session, coord):
-        print("Running init hook")
         session.run(self.iterator_init_op)
 
 
 def main():
+    tf.app.flags.DEFINE_boolean("enable_estimator_log", False, """Enable logs of estimators""")
+    if tf.app.flags.FLAGS.enable_estimator_log:
+        tf.logging.set_verbosity(tf.logging.INFO)
 
-    config= tf.estimator.RunConfig()
-    config = config.replace(save_summary_steps=10000)
-    config = config.replace(save_checkpoints_steps=10000)
-    config = config.replace(keep_checkpoint_max=20)
-    config = config.replace(log_step_count_steps=2)
+    config= tf.estimator.RunConfig(save_summary_steps=10,
+                                   save_checkpoints_steps=1000,
+                                   keep_checkpoint_max=200,
+                                   log_step_count_steps=1000)
 
-    if tf.app.flags.FLAGS.enable_tfrecords:
-        input_train, input_train_init_hook = get_input_fn_dataset('train', 30)
-        input_validation, input_validation_init_hook = get_input_fn_dataset('validation', 1)
-        input_test, input_test_init_hook = get_input_fn_dataset('test', 1)
-    else:
-        input_train, input_validation, input_test = get_inputs_fn_based_on_generator()
+    estimator = tf.estimator.Estimator(model_fn=perso_mnist_net_model_fn,
+                                       model_dir='mnist_trained',
+                                       params={'learning_rate': 0.01},
+                                       config=config)
 
-    print("Test")
+    input_train, input_train_init_hook = get_input_fn_dataset('train', batch_size=100, num_epoch=2)
+    input_validation, input_validation_init_hook = get_input_fn_dataset('validation', batch_size=100, num_epoch=1)
 
-    params = {'learning_rate': 0.01, 'dropout': 1.00}
-
-    if tf.app.flags.FLAGS.enable_estimators:
-        estimator = tf.estimator.Estimator(model_fn=perso_mnist_net_model_fn,
-                                           model_dir='mnist_test',
-                                           params=params,
-                                           config=config)
-
-
+    # start training and evaluation loop, training on 2 epoch then evaluate on validation dataset etc..
+    for i in range(20):
         estimator.train(input_fn=input_train, hooks=[input_train_init_hook])
-        #estimator.train(input_fn=lambda : ([0]*128, [[0]*10]*128))
-    else:
-        with tf.Session() as sess:
-            next_batch = input_train()
-            X = next_batch[0]
-            Y = next_batch[1]
-            estimator_spec = perso_mnist_net_model_fn(X, Y, params=params)
-
-            sess.run(input_train_init_hook.iterator_init_op)
-            sess.run(tf.global_variables_initializer())
-            while True:
-                start = time.time()
-                loss_val = sess.run(estimator_spec.train_op)
-                duration = time.time() - start
-                print("Nb/sec = {}".format(1.0/duration))
+        res = estimator.evaluate(input_fn=input_validation, hooks=[input_validation_init_hook])
+        print("validation is {}".format(res))
 
 
-    #print("Bench iterator speed")
-    #session = tf.Session()
-    #session.run(input_train_init_hook.iterator_init_op)
-    #while True:
-    #    start = time.time()
-    #    val = session.run(input_train())  # <-- the duration never stop to increase here
-    #    #print(val)
+    input_test, input_test_init_hook = get_input_fn_dataset('test', batch_size=100, num_epoch=1)
+    # print the accuracy on the test set (in our case we have the labels of the test case)
+    test_set_res = estimator.evaluate(input_fn=input_test, hooks=[input_test_init_hook])
+    print("Final res accuracy on test set is {}".format(test_set_res['acc_validation']))
 
-    #    duration = time.time() - start
-    #    print("duration is {}".format(duration))
+    # we could just predict and save image in directory matching the class predicted without using the original labels
+    debug_img_path = 'debug_img/{}'
+    for num in range(10):
+        os.makedirs(debug_img_path.format(num), exist_ok=True)
+
+    generator = estimator.predict(input_fn=input_test, hooks=[input_test_init_hook])
+    for num, val in enumerate(generator):
+        cv2.imwrite(debug_img_path.format(val['class']) + '/_{}'.format(num) + '.png', 255 * val['image'].reshape(28, 28))
 
 
 if __name__ == "__main__":
-    tf.app.flags.DEFINE_boolean("enable_tfrecords", True, """True = use tfrecords, False = use python generator (slow)""")
-    tf.app.flags.DEFINE_boolean("enable_estimators", True, """True = use estimators""")
     main()

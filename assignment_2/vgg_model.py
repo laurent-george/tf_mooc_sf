@@ -42,14 +42,12 @@ def _conv2d_relu(vgg_layers, prev_layer, layer, layer_name):
     Hint for choosing strides size: 
         for small images, you probably don't want to skip any pixel
     """
-    W, b = _weights(vgg_layers, layer, layer_name)
-    conv_layer = tf.keras.layers.Conv2D(filters=b.size,
-                                        kernel_size = W.shape,
-                                        name=layer_name,
-                                        padding='same',
-                                        use_bias=False,
-                                        strides=(1,1))(prev_layer)
-    relu_layer = tf.keras.layers.Activation('relu')(conv_layer)
+    with tf.variable_scope(layer_name) as scope:
+
+        W, b = _weights(vgg_layers, layer, layer_name)
+        #print(b.shape[0])
+        conv2d = tf.nn.conv2d(prev_layer, filter=tf.constant(W, name='weights'), strides=[1, 1, 1, 1], padding='SAME')
+        relu_layer = tf.nn.relu(conv2d + tf.constant(b, name='bias'))
 
     return relu_layer
 

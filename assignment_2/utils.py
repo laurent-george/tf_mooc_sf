@@ -20,6 +20,7 @@ def download(download_link, file_name, expected_bytes):
     if os.path.exists(file_name):
         print("VGG-19 pre-trained model ready")
         return
+
     print("Downloading the VGG pre-trained model. This might take a while ...")
     file_name, _ = urllib.request.urlretrieve(download_link, file_name)
     file_stat = os.stat(file_name)

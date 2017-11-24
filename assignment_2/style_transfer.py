@@ -19,13 +19,26 @@ import vgg_model
 import utils
 
 # parameters to manage experiments
-STYLE = 'guernica'
-CONTENT = 'deadpool'
+STYLE = 'starry_night'
+#CONTENT = 'deadpool'
+CONTENT = 'marin'
 STYLE_IMAGE = 'styles/' + STYLE + '.jpg'
 CONTENT_IMAGE = 'content/' + CONTENT + '.jpg'
-IMAGE_HEIGHT = 250
-IMAGE_WIDTH = 333
+IMAGE_HEIGHT = 240
+IMAGE_WIDTH = 320
 NOISE_RATIO = 0.6 # percentage of weight of the noise for intermixing with the content image
+
+# Layers used for style features. You can change this.
+STYLE_LAYERS = ['conv1_1', 'conv2_1', 'conv3_1', 'conv4_1', 'conv5_1']
+STYLE_LAYERS = ['conv1_1', 'conv2_1', 'conv3_1', 'conv4_1', 'conv5_1']
+W = [0.5, 1.0, 1.5, 3.0, 4.0] # give more weights to deeper layers.
+#W = [0.5, 0.5, 0.5, 0.5, 0.5] # give more weights to deeper layers.
+
+# Layer used for content features. You can change this.
+CONTENT_LAYER = 'conv4_2'
+CONTENT_LAYER = 'conv4_1'
+CONTENT_WEIGHT = 0.01
+STYLE_WEIGHT = 1
 
 # Layers used for style features. You can change this.
 STYLE_LAYERS = ['conv1_1', 'conv2_1', 'conv3_1', 'conv4_1', 'conv5_1']
@@ -36,6 +49,8 @@ CONTENT_LAYER = 'conv4_2'
 
 ITERS = 300
 LR = 2.0
+
+
 
 SAVE_EVERY = 20
 
@@ -65,24 +80,28 @@ def _create_content_loss(p, f):
         the content loss
 
     """
-    #However, in practice, we’ve found that this function makes it really slow to converge, so people
-    #often replace the coefficient ½ with 1/(4s) in which s is the product of the dimension of P. If P
     #has dimension [5, 5, 3] then s = 5 * 5 * 3 = 75.
     s = tf.reduce_prod(tf.shape(p))
-    k = 1.0 / 4.0 * s
+    k = 1.0 / 4.0 * tf.cast(s, dtype=tf.float32)
     #k = 1.0 / (4*s)
-    content_loss =  k * tf.reduce_sum(tf.squared_difference(p, f))
+    #content_loss =  k * tf.reduce_sum(tf.squared_difference(p, f))
+
+    content_loss =  tf.reduce_sum((f - p) ** 2) / (4.0 * p.size)
+
     return content_loss
+
 
 def _gram_matrix(F, N, M):
     """ Create and return the gram matrix for tensor F
         Hint: you'll first have to reshape F
     """
-    reshape_f = tf.reshape(F, (N, M))
-    reshape_f_transpose = tf.transpose(reshape_f)
+    #reshape_f = tf.reshape(F, (N, M))
+    #reshape_f_transpose = tf.transpose(reshape_f)
 
-    gram_matrix = tf.multiply(reshape_f, reshape_f_transpose)
-    return gram_matrix
+    #gram_matrix = tf.matmul(reshape_f, reshape_f_transpose)
+    #return gram_matrix
+    F = tf.reshape(F, (M, N))
+    return tf.matmul(tf.transpose(F), F)
 
 def _single_style_loss(a, g):
     """ Calculate the style loss at a certain layer
@@ -96,12 +115,12 @@ def _single_style_loss(a, g):
         2. we'll use the same coefficient for style loss as in the paper
         3. a and g are feature representation, not gram matrices
     """
-    feature_map_shape = tf.shape(a)
-    N = a[3]
-    M = a[2] * a[1]
+    feature_map_shape = a.shape
+    N = feature_map_shape[3]
+    M = feature_map_shape[2] * feature_map_shape[1]
     A = _gram_matrix(a, N, M)
     G = _gram_matrix(g, N, M)
-    E_l = 1.0 / (4* N**2 * M**2) * tf.reduce_sum(tf.squared_difference(G, A))
+    E_l = tf.reduce_sum(tf.squared_difference(G, A)) / (4* N**2 * M**2)
     return E_l
 
 def _create_style_loss(A, model):
@@ -109,10 +128,10 @@ def _create_style_loss(A, model):
     """
     n_layers = len(STYLE_LAYERS)
     E = [_single_style_loss(A[i], model[STYLE_LAYERS[i]]) for i in range(n_layers)]
-    weights = range(1, 1 + len(E))
-    prods = [x*y for x, y in zip(E, weights)]
-    L_style = tf.reduce_sum(prods)
-    return L_style
+    #weights = range(1, 1 + len(E))
+    #prods = [x*y for x, y in zip(E, weights)]
+    #L_style = tf.reduce_sum(prods)
+    return sum([W[i] * E[i] for i in range(n_layers)])
 
 
     
@@ -134,9 +153,7 @@ def _create_losses(model, input_image, content_image, style_image):
         ## Hint: don't forget the content loss and style loss weights
         
         ##########################################
-        alpha = 1.0
-        beta = alpha * 20
-        total_loss = alpha * content_loss + beta * style_loss
+        total_loss = CONTENT_WEIGHT * content_loss + STYLE_WEIGHT * style_loss
 
 
     return content_loss, style_loss, total_loss
@@ -147,7 +164,7 @@ def _create_summary(model):
     """
 
     for key in ['content_loss', 'style_loss', 'total_loss']:
-        loss_summary = tf.summary.scalar(model[key], name=key)
+        loss_summary = tf.summary.scalar(name=key, tensor=model[key])
 
     summary_op = tf.summary.merge_all()
     return summary_op
@@ -186,6 +203,8 @@ def train(model, generated_image, initial_image):
                 ## TO DO: obtain generated image and loss
 
                 summary, total_loss, gen_image = sess.run([model['summary_op'], model['total_loss'], generated_image])
+                #gen_image, total_loss, summary = sess.run([generated_image, model['total_loss'], model['summary_op']])
+
                 ###############################
                 gen_image = gen_image + MEAN_PIXELS
                 writer.add_summary(summary, global_step=index)
@@ -194,7 +213,7 @@ def train(model, generated_image, initial_image):
                 print('   Time: {}'.format(time.time() - start_time))
                 start_time = time.time()
 
-                filename = 'outputs/%d.png' % (index)
+                filename = 'outputs/image_{:08}.png'.format(index)
                 utils.save_image(filename, gen_image)
 
                 if (index + 1) % SAVE_EVERY == 0:
@@ -223,8 +242,9 @@ def main():
     ###############################
     ## TO DO: create optimizer
     ## model['optimizer'] = ...
-    learning_rate = 0.001
-    model['optimizer'] = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    learning_rate = 2 # 0.001
+    model['optimizer'] = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(model['total_loss'],
+                                                                                      global_step=model['global_step'])
     ###############################
     model['summary_op'] = _create_summary(model)
 
